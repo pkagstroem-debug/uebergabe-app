@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 
 // --- KONFIGURATION ---
-const N8N_WEBHOOK_URL = "https://ludwigsimmo.app.n8n.cloud/webhook/uebergabe";
+const N8N_WEBHOOK_URL = "const N8N_WEBHOOK_URL = import.meta.env.VITE_N8N_WEBHOOK_URL;";
 
 // --- HELPER: UUID (ROBUST) ---
 const uuid = () => {
