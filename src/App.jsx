@@ -20,9 +20,8 @@ import {
   Loader2,
   Download
 } from 'lucide-react';
-
 // --- KONFIGURATION ---
-const N8N_WEBHOOK_URL = "https://ludwigsimmo.app.n8n.cloud/webhook-test/uebergabe";
+const N8N_WEBHOOK_URL = "https://ludwigsimmo.app.n8n.cloud/webhook/uebergabe";
 
 // --- HELPER: UUID (ROBUST) ---
 const uuid = () => {
