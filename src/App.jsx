@@ -1,5 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
-// Bibliotheken werden dynamisch geladen
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   Trash2, 
   Plus, 
@@ -19,11 +18,29 @@ import {
   UploadCloud,
   Loader2,
   Download,
-  MapPin
+  MapPin,
+  Home,
+  User,
+  LayoutGrid,
+  Save,
+  RotateCcw,
+  AlertTriangle
 } from 'lucide-react';
 
 // --- KONFIGURATION ---
-const N8N_WEBHOOK_URL = import.meta.env.VITE_N8N_WEBHOOK_URL;
+const getN8nWebhookUrl = () => {
+  try {
+    if (typeof import.meta !== 'undefined' && import.meta.env) {
+      return import.meta.env.VITE_N8N_WEBHOOK_URL;
+    }
+  } catch (e) {
+    console.warn('Environment variables not accessible via import.meta');
+  }
+  return '';
+};
+
+const N8N_WEBHOOK_URL = getN8nWebhookUrl();
+const DRAFT_STORAGE_KEY = "uebergabeApp.currentDraft"; // [PERSISTENCE] Key für localStorage
 
 // --- HELPER: UUID (ROBUST) ---
 const uuid = () => {
@@ -37,15 +54,13 @@ const uuid = () => {
 };
 
 // --- KOMPONENTE: ADRESS AUTOCOMPLETE ---
-// Ersetzt das Standard-Input Feld für Adressen durch eine Nominatim-Suche
 const AddressAutocomplete = ({ value, onChange, placeholder, className }) => {
   const [suggestions, setSuggestions] = useState([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false); // Neu: Um "Keine Ergebnisse" anzuzeigen
+  const [hasSearched, setHasSearched] = useState(false);
   const wrapperRef = useRef(null);
 
-  // Schließt Dropdown bei Klick außerhalb
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
@@ -56,9 +71,7 @@ const AddressAutocomplete = ({ value, onChange, placeholder, className }) => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Fetch Logic mit Debounce
   useEffect(() => {
-    // Nur suchen, wenn Dropdown aktiv sein soll und min. 3 Zeichen
     if (!showDropdown || !value || value.length < 3) {
       setSuggestions([]);
       setHasSearched(false);
@@ -69,20 +82,14 @@ const AddressAutocomplete = ({ value, onChange, placeholder, className }) => {
       setIsLoading(true);
       setHasSearched(false);
       try {
-        // countrycodes=de hinzugefügt für bessere Ergebnisse
         const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(value)}&format=json&addressdetails=1&limit=5&countrycodes=de`;
-        const res = await fetch(url, {
-          headers: {
-            "Accept-Language": "de-DE,de;q=0.9,en;q=0.8" // Wichtig für deutsche Straßennamen
-          }
-        });
+        const res = await fetch(url, { headers: { "Accept-Language": "de-DE,de;q=0.9,en;q=0.8" } });
         
         if (res.ok) {
           const data = await res.json();
           setSuggestions(data);
           setHasSearched(true);
         } else {
-          console.error("Nominatim Error:", res.status);
           setSuggestions([]);
           setHasSearched(true);
         }
@@ -92,28 +99,24 @@ const AddressAutocomplete = ({ value, onChange, placeholder, className }) => {
       } finally {
         setIsLoading(false);
       }
-    }, 400); // 400ms Debounce
+    }, 400);
 
     return () => clearTimeout(timer);
   }, [value, showDropdown]);
 
   const handleSelect = (item) => {
-    // Formatierung: Straße Hausnummer, PLZ Ort
     const a = item.address;
     const street = a.road || a.pedestrian || a.street || '';
     const houseNr = a.house_number || '';
     const zip = a.postcode || '';
     const city = a.city || a.town || a.village || a.municipality || '';
 
-    let formattedAddress = item.display_name; // Fallback
-
-    // Wenn wir saubere Daten haben, formatieren wir selbst
+    let formattedAddress = item.display_name;
     if ((street || city) && zip) {
       const streetPart = `${street} ${houseNr}`.trim();
       const cityPart = `${zip} ${city}`.trim();
       formattedAddress = `${streetPart}, ${cityPart}`.replace(/^, /, '').trim();
     }
-
     onChange(formattedAddress);
     setShowDropdown(false);
   };
@@ -141,23 +144,12 @@ const AddressAutocomplete = ({ value, onChange, placeholder, className }) => {
           </div>
         )}
       </div>
-
       {showDropdown && (
         <ul className="absolute z-[100] w-full bg-white border border-slate-300 rounded-b-lg shadow-xl mt-1 max-h-60 overflow-y-auto">
-          {isLoading && !suggestions.length && (
-            <li className="px-3 py-2 text-sm text-slate-400 italic">Suche Adresse...</li>
-          )}
-          
-          {!isLoading && hasSearched && suggestions.length === 0 && (
-             <li className="px-3 py-2 text-sm text-slate-400 italic">Keine Adresse gefunden.</li>
-          )}
-
+          {isLoading && !suggestions.length && <li className="px-3 py-2 text-sm text-slate-400 italic">Suche Adresse...</li>}
+          {!isLoading && hasSearched && suggestions.length === 0 && <li className="px-3 py-2 text-sm text-slate-400 italic">Keine Adresse gefunden.</li>}
           {suggestions.map((s) => (
-            <li
-              key={s.place_id}
-              onClick={() => handleSelect(s)}
-              className="px-3 py-2 text-sm hover:bg-blue-50 cursor-pointer border-b border-slate-100 last:border-0 text-slate-700 flex items-start gap-2"
-            >
+            <li key={s.place_id} onClick={() => handleSelect(s)} className="px-3 py-2 text-sm hover:bg-blue-50 cursor-pointer border-b border-slate-100 last:border-0 text-slate-700 flex items-start gap-2">
               <MapPin size={14} className="mt-1 text-slate-400 flex-shrink-0" />
               <span>{s.display_name}</span>
             </li>
@@ -171,15 +163,11 @@ const AddressAutocomplete = ({ value, onChange, placeholder, className }) => {
 // --- CSS STYLES FÜR PRINT/PDF ---
 const PrintStyles = () => (
   <style>{`
-    /* A4 Definition */
     @page { size: A4; margin: 0; }
-    
-    /* Container für den PDF-Generator (versteckt, strikt A4) */
     #pdf-print-container {
       width: 210mm; 
-      /* min-height muss nicht gesetzt werden, html2canvas nimmt den content */
       background-color: white;
-      padding: 10mm; /* 10mm Rand wie gefordert */
+      padding: 10mm;
       box-sizing: border-box;
       position: absolute;
       top: 0;
@@ -190,13 +178,10 @@ const PrintStyles = () => (
       font-size: 11pt;
       line-height: 1.4;
     }
-
-    /* WICHTIG: Klassen für die Block-Logik */
     .pdf-block, .pdf-signatures-block, .pdf-photo-block {
       position: relative;
       box-sizing: border-box;
     }
-
     #pdf-print-container img {
       max-width: 100%;
       height: auto;
@@ -211,8 +196,11 @@ const INITIAL_DATA = {
     id: uuid(),
     date: new Date().toISOString().split('T')[0],
     address: '',
-    sellers: [{ id: 's1', name: '', email: '' }], 
-    buyers: [{ id: 'b1', name: '', email: '' }]
+    // Eine zentrale Liste für alle Parteien
+    parties: [
+      { id: 'p1', name: '', email: '', role: 'Verkäufer' },
+      { id: 'p2', name: '', email: '', role: 'Käufer' }
+    ]
   },
   keys: [
     { id: 'k1', type: 'Haus-/Wohnungsschlüssel', count: '', number: '' },
@@ -229,6 +217,10 @@ const INITIAL_DATA = {
       { id: 'h2', room: 'Schlafzimmer', number: '', reading: '', image: null, imageName: '' }
     ]
   },
+  // Bestandsaufnahme
+  inventory: {
+    rooms: [] // { id, name, note, image, imageName }
+  },
   defects: {
     hasDefects: false,
     list: [
@@ -240,12 +232,16 @@ const INITIAL_DATA = {
   signatures: [] 
 };
 
-const SIGNER_ROLES = ['Verkäufer', 'Käufer', 'Mieter', 'Vermieter', 'Makler', 'Zeuge'];
+// Rollen Definitionen
+const PARTY_ROLES_OPTIONS = ['Verkäufer', 'Käufer', 'Eigentümer', 'Mieter', 'Hausverwaltung', 'Makler'];
+// Für Unterschriften (kann erweitert werden oder gleich bleiben)
+const SIGNER_ROLES = PARTY_ROLES_OPTIONS.concat(['Zeuge']);
 
 const STEPS = [
   { id: 'meta', title: 'Daten', icon: FileText },
   { id: 'keys', title: 'Schlüssel', icon: Key },
   { id: 'meters', title: 'Zähler & Mängel', icon: Zap },
+  { id: 'inventory', title: 'Bestand', icon: LayoutGrid },
   { id: 'preview', title: 'Abschluss', icon: PenTool }
 ];
 
@@ -297,43 +293,42 @@ const ImageUploadButton = ({ image, onUpload, onRemove, labelSuffix = "Foto" }) 
 };
 
 // --- CORE PROTOCOL CONTENT (SHARED) ---
-// Accepts isPreview to handle responsive layout vs fixed print layout
 const ProtocolContent = ({ data, signatures, isPreview }) => {
   const activeKeys = data.keys.filter(k => k.count && k.count > 0);
   const showHeating = data.meters.hasHeating && data.meters.heating.some(h => h.number || h.reading);
   const showDefects = data.defects.hasDefects && data.defects.list.length > 0;
+  const showInventory = data.inventory && data.inventory.rooms && data.inventory.rooms.length > 0;
 
+  // Filter Parties
+  const sellers = data.meta.parties.filter(p => p.role === 'Verkäufer');
+  const buyers = data.meta.parties.filter(p => p.role === 'Käufer');
+  const otherParties = data.meta.parties.filter(p => p.role !== 'Verkäufer' && p.role !== 'Käufer');
+
+  // Bilder sammeln
   const allImages = [];
   data.meters.main.forEach(m => { if(m.image) allImages.push({ title: m.imageName, src: m.image }); });
   if(data.meters.hasHeating) {
     data.meters.heating.forEach(h => { if(h.image) allImages.push({ title: h.imageName || `HKV ${h.room}.jpg`, src: h.image }); });
   }
+  if(showInventory) {
+    data.inventory.rooms.forEach(r => { if(r.image) allImages.push({ title: r.imageName || `Zimmer: ${r.name}`, src: r.image }); });
+  }
   if(data.defects.hasDefects) {
     data.defects.list.forEach(d => { if(d.image) allImages.push({ title: d.imageName || `Mangel ${d.location}.jpg`, src: d.image }); });
   }
 
-  // Grid Klasse abhängig vom Modus:
-  // Preview: Responsiv (1 Spalte Mobile, 2 Spalten Tablet+)
-  // Print: Immer 2 Spalten
   const gridClass = isPreview 
     ? "grid grid-cols-1 md:grid-cols-2 gap-4" 
-    : "grid grid-cols-2 gap-4"; // Tailwind grid
+    : "grid grid-cols-2 gap-4";
 
   return (
     <div className="text-slate-900 font-serif text-sm leading-relaxed">
-       {/* HEADER BLOCK - RESPONSIV GEMACHT */}
-       {/* Mobile: flex-col, Logo oben zentriert (Order 1), Titel unten zentriert (Order 2) */}
-       {/* Desktop/Print (sm:): flex-row, Titel links (Order 1), Logo rechts (Order 2) */}
+       {/* HEADER BLOCK */}
        <div className="flex flex-col sm:flex-row justify-between items-center sm:items-start mb-8 border-b-2 border-slate-800 pb-4 pdf-block">
-        
-        {/* TITEL */}
         <div className="order-2 sm:order-1 text-center sm:text-left w-full sm:w-auto">
           <h1 className="text-2xl font-bold uppercase tracking-widest text-slate-900">Übergabeprotokoll</h1>
           <p className="text-slate-500">Haus- / Wohnungsübergabe</p>
         </div>
-
-        {/* LOGO */}
-        {/* border-l-4 und padding-left nur auf Desktop (sm:) sichtbar, um Breite auf Mobile zu sparen */}
         <div className="order-1 sm:order-2 text-center sm:text-right font-bold text-slate-700 sm:border-l-4 sm:border-blue-600 sm:pl-3 mb-4 sm:mb-0 w-full sm:w-auto">
           LUDWIGS<br/>IMMOBILIEN
         </div>
@@ -349,27 +344,48 @@ const ProtocolContent = ({ data, signatures, isPreview }) => {
           <p className="text-xs uppercase text-slate-500 font-bold">Datum</p>
           <p className="font-medium text-lg border-b border-slate-300 pb-1 min-h-[1.5em]">{data.meta.date}</p>
         </div>
+        
+        {/* Verkäufer Block */}
         <div className="mb-4">
           <p className="text-xs uppercase text-slate-500 font-bold">Verkäufer</p>
           <div className="border-b border-slate-300 pb-1 min-h-[1.5em]">
-             {data.meta.sellers.length > 0 && data.meta.sellers[0].name ? (
+             {sellers.length > 0 ? (
                <ul className="list-none m-0 p-0">
-                 {data.meta.sellers.map(s => s.name && (<li key={s.id}>{s.name} {s.email && <span className="text-slate-500 text-xs italic">({s.email})</span>}</li>))}
+                 {sellers.map(s => s.name && (<li key={s.id}>{s.name} {s.email && <span className="text-slate-500 text-xs italic">({s.email})</span>}</li>))}
                </ul>
              ) : '—'}
           </div>
         </div>
+
+        {/* Käufer Block */}
         <div className="mb-4">
            <p className="text-xs uppercase text-slate-500 font-bold">Käufer</p>
            <div className="border-b border-slate-300 pb-1 min-h-[1.5em]">
-             {data.meta.buyers.length > 0 && data.meta.buyers[0].name ? (
+             {buyers.length > 0 ? (
                <ul className="list-none m-0 p-0">
-                 {data.meta.buyers.map(b => b.name && (<li key={b.id}>{b.name} {b.email && <span className="text-slate-500 text-xs italic">({b.email})</span>}</li>))}
+                 {buyers.map(b => b.name && (<li key={b.id}>{b.name} {b.email && <span className="text-slate-500 text-xs italic">({b.email})</span>}</li>))}
                </ul>
              ) : '—'}
           </div>
         </div>
       </div>
+
+      {/* Weitere Parteien Block (Falls vorhanden) */}
+      {otherParties.length > 0 && (
+        <div className="mb-8 pdf-block">
+          <p className="text-xs uppercase text-slate-500 font-bold mb-1">Weitere Parteien</p>
+          <div className="border border-slate-200 bg-slate-50 p-3 rounded text-sm">
+             <ul className="grid grid-cols-1 md:grid-cols-2 gap-2">
+               {otherParties.map(p => (
+                 <li key={p.id} className="flex flex-col">
+                   <span className="font-bold text-slate-700">{p.role}:</span> 
+                   <span>{p.name || 'Unbenannt'} <span className="text-slate-400 italic text-xs">{p.email ? `(${p.email})` : ''}</span></span>
+                 </li>
+               ))}
+             </ul>
+          </div>
+        </div>
+      )}
 
       {/* KEYS BLOCK */}
       <div className="mb-8 pdf-block">
@@ -403,7 +419,6 @@ const ProtocolContent = ({ data, signatures, isPreview }) => {
         <h3 className="font-bold bg-slate-100 p-2 mb-2 border-l-4 border-slate-400">2. Zählerstände</h3>
       </div>
       
-      {/* INDIVIDUAL METERS BLOCKS */}
       <div className={`${gridClass} mb-6`}>
         {data.meters.main.length > 0 ? data.meters.main.map((m) => (
           <div key={m.id} className="border border-slate-300 p-3 rounded bg-white pdf-block">
@@ -424,9 +439,8 @@ const ProtocolContent = ({ data, signatures, isPreview }) => {
         )) : <p className="text-slate-400 italic mb-4 pdf-block">Keine Hauptzähler erfasst.</p>}
       </div>
 
-      {/* HEATING BLOCK */}
       {showHeating && (
-        <div className="mt-4 pdf-block overflow-x-auto">
+        <div className="mt-4 mb-8 pdf-block overflow-x-auto">
           <p className="text-xs font-bold uppercase mb-2">Heizkostenverteiler</p>
           <table className="w-full text-sm border border-slate-300">
             <thead className="bg-slate-50">
@@ -451,13 +465,34 @@ const ProtocolContent = ({ data, signatures, isPreview }) => {
         </div>
       )}
 
-      {/* DEFECTS HEADER */}
-      <div className="mt-8 pdf-block">
-        <h3 className="font-bold bg-slate-100 p-2 mb-2 border-l-4 border-red-400 text-red-900">3. Festgestellte Mängel</h3>
+      {/* INVENTORY BLOCK (NEU) */}
+      <div className="pdf-block">
+         <h3 className="font-bold bg-slate-100 p-2 mb-2 border-l-4 border-blue-400">3. Bestandsaufnahme</h3>
+      </div>
+      <div className="mb-8 space-y-3">
+        {!showInventory ? (
+          <p className="text-slate-500 italic px-2 pdf-block">Keine Zimmer erfasst.</p>
+        ) : (
+          data.inventory.rooms.map((room, i) => (
+            <div key={i} className="border border-slate-200 p-3 rounded pdf-block bg-slate-50/50">
+               <div className="flex justify-between items-start">
+                  <span className="font-bold text-slate-800">{room.name}</span>
+                  {room.image && <span className="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded border border-blue-100">Foto im Anhang</span>}
+               </div>
+               {room.note && (
+                 <p className="text-sm text-slate-600 mt-1 whitespace-pre-wrap">{room.note}</p>
+               )}
+            </div>
+          ))
+        )}
       </div>
 
-      {/* INDIVIDUAL DEFECTS BLOCKS */}
-      <div className="space-y-4">
+      {/* DEFECTS HEADER */}
+      <div className="pdf-block">
+        <h3 className="font-bold bg-slate-100 p-2 mb-2 border-l-4 border-red-400 text-red-900">4. Festgestellte Mängel</h3>
+      </div>
+
+      <div className="space-y-4 mb-8">
         {!showDefects ? (
            <p className="text-slate-500 italic px-2 pdf-block">Keine Mängel festgestellt.</p>
         ) : (
@@ -474,8 +509,8 @@ const ProtocolContent = ({ data, signatures, isPreview }) => {
       </div>
 
       {/* DOCS BLOCK */}
-      <div className="mt-8 mb-8 pdf-block">
-        <h3 className="font-bold bg-slate-100 p-2 mb-2 border-l-4 border-slate-400">4. Sonstiges</h3>
+      <div className="mb-8 pdf-block">
+        <h3 className="font-bold bg-slate-100 p-2 mb-2 border-l-4 border-slate-400">5. Sonstiges</h3>
         <div className="mb-4">
           <p className="text-xs uppercase text-slate-500 font-bold">Übergebene Unterlagen</p>
           <p className="whitespace-pre-wrap break-words">{data.docs || '—'}</p>
@@ -486,7 +521,7 @@ const ProtocolContent = ({ data, signatures, isPreview }) => {
         </div>
       </div>
 
-      {/* SIGNATURES BLOCK (Geschlossen) */}
+      {/* SIGNATURES BLOCK */}
       <div className="mt-12 pdf-signatures-block">
         <div className="pt-4 border-t-2 border-slate-900">
           <h3 className="font-bold uppercase tracking-widest mb-6 text-center">Unterschriften</h3>
@@ -537,16 +572,11 @@ const ProtocolContent = ({ data, signatures, isPreview }) => {
   );
 };
 
-// --- RENDER VARIANTS ---
-
-const ProtocolDocument = ({ data, signatures }) => {
-  return (
-    // Responsive Preview Container
-    <div className="bg-white shadow-lg border border-slate-200 mx-auto w-full max-w-[210mm] p-4 md:p-[10mm]">
-      <ProtocolContent data={data} signatures={signatures} isPreview={true} />
-    </div>
-  );
-};
+// [PERF] Memoized Version des ProtocolContent für die Vorschau
+// Verhindert Re-Renders der Vorschau bei jeder Eingabe, solange die Props gleich bleiben
+// Hinweis: Da data bei jedem Keystroke neu erstellt wird, nützt memo nur etwas, 
+// wenn man zwischen Steps wechselt, ohne data zu ändern.
+const MemoProtocolContent = React.memo(ProtocolContent);
 
 // --- MAIN APP COMPONENT ---
 
@@ -559,8 +589,80 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   
+  // [PERF] Bedingtes Rendering des Print-Containers
+  const [showPrintContainer, setShowPrintContainer] = useState(false);
+  
+  // [PERSISTENCE] State für Drafts
+  const [foundDraft, setFoundDraft] = useState(null);
+  const [showDraftDialog, setShowDraftDialog] = useState(false);
+  const [draftRestored, setDraftRestored] = useState(false);
+
   const canvasRef = useRef(null);
   const [isDrawing, setIsDrawing] = useState(false);
+
+  // --- PERSISTENCE: RESTORE DRAFT ON MOUNT ---
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(DRAFT_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && parsed.data && parsed.data.meta) {
+          setFoundDraft(parsed);
+          setShowDraftDialog(true);
+        }
+      }
+    } catch (e) {
+      console.error("Fehler beim Laden des Drafts:", e);
+    }
+  }, []);
+
+  // --- PERSISTENCE: AUTO-SAVE DRAFT ---
+  useEffect(() => {
+    // Nicht speichern, wenn wir gerade erst mounten oder den Dialog anzeigen
+    if (showDraftDialog) return;
+
+    // Debounce Save (1 Sekunde)
+    const timer = setTimeout(() => {
+      try {
+        const draft = {
+          data,
+          savedAt: new Date().toISOString()
+        };
+        localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+        // Optional: Kleiner Log oder Status
+      } catch (e) {
+        console.warn("Auto-Save fehlgeschlagen (evtl. Quota exceeded):", e);
+      }
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [data, showDraftDialog]);
+
+  // Funktion: Draft wiederherstellen
+  const restoreDraft = () => {
+    if (foundDraft) {
+      setData(foundDraft.data);
+      setDraftRestored(true);
+      setShowDraftDialog(false);
+    }
+  };
+
+  // Funktion: Draft verwerfen
+  const discardDraft = () => {
+    localStorage.removeItem(DRAFT_STORAGE_KEY);
+    setShowDraftDialog(false);
+  };
+
+  // Funktion: Reset (Neues Protokoll)
+  const resetProtocol = () => {
+    if (confirm("Wirklich neu starten? Alle nicht gespeicherten Eingaben gehen verloren.")) {
+      setData(INITIAL_DATA);
+      setDraftRestored(false);
+      localStorage.removeItem(DRAFT_STORAGE_KEY);
+      setStep(0);
+      window.scrollTo(0, 0);
+    }
+  };
 
   useEffect(() => {
     const scripts = [
@@ -659,7 +761,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (step === 3 && canvasRef.current) {
+    if (step === 4 && canvasRef.current) { 
       const canvas = canvasRef.current;
       const resizeCanvas = () => {
         const parent = canvas.parentElement;
@@ -677,9 +779,10 @@ export default function App() {
     }
   }, [step]);
 
-  // --- PDF GENERATION LOGIC (ROBUST MULTI-PAGE SLICING) ---
+  // --- PDF GENERATION ---
   const generatePdfBlob = async () => {
     const input = document.getElementById('pdf-print-container');
+    if(!input) throw new Error("Print Container nicht gefunden (DOM Fehler).");
     if (!window.html2canvas || !window.jspdf) throw new Error("PDF-Bibliotheken sind noch nicht geladen.");
 
     try {
@@ -693,62 +796,26 @@ export default function App() {
           const container = clonedDoc.getElementById('pdf-print-container');
           container.style.display = 'block'; 
           
-          // Geometrie für A4 in Pixeln (basierend auf der tatsächlichen Render-Breite des Containers)
-          // Container Breite ist fest 210mm per CSS.
           const containerWidthPx = container.offsetWidth; 
           const mmToPx = containerWidthPx / 210;
           const pageHeightPx = 297 * mmToPx;
-          const paddingPx = 10 * mmToPx; // 10mm Rand oben/unten
+          const paddingPx = 10 * mmToPx;
           
-          // Selektiere alle Blöcke, die nicht getrennt werden dürfen
           const blocks = container.querySelectorAll('.pdf-block, .pdf-signatures-block, .pdf-photo-block');
-          
-          // Wir gehen die Blöcke von oben nach unten durch.
-          // Da wir Margins einfügen, verschiebt sich alles nach unten.
-          // offsetTop in html2canvas (bzw. im geklonten DOM) ist "live".
-          
-          let currentY = 0; // Virtueller Cursor im Fluss
-
-          // HACK: Wir iterieren, aber müssen beachten, dass sich Positionen verschieben.
-          // Da wir im geklonten DOM sind, können wir style.marginTop ändern und danach offsetTop neu lesen (force reflow).
           
           for (let i = 0; i < blocks.length; i++) {
             const block = blocks[i];
-            
-            // Lese aktuelle Position (relativ zum Container)
             const top = block.offsetTop;
             const height = block.offsetHeight;
             const bottom = top + height;
-            
-            // Auf welcher Seite (Index 0) startet der Block?
-            // "Seitenkante" ist bei N * pageHeightPx.
-            // Der nutzbare Bereich endet aber bei (N+1) * pageHeightPx - paddingPx.
-            
             const startPage = Math.floor(top / pageHeightPx);
-            
-            // Grenze für den aktuellen Block auf seiner Startseite
             const pageBottomLimit = (startPage + 1) * pageHeightPx - paddingPx;
             
-            // Prüfung: Ragt der Block über das Limit oder komplett auf die nächste Seite?
-            // Fall 1: Block startet auf Seite N, endet aber nach dem Limit von Seite N.
-            // Fall 2: Block ist größer als eine Seite (Spezialfall, lassen wir hier zu, aber schieben ihn an den Anfang).
-            
             if (bottom > pageBottomLimit) {
-              // Block passt nicht mehr in den Rest der Seite.
-              // Wir schieben ihn auf den Anfang der nächsten Seite + Padding.
-              
               const nextPageStart = (startPage + 1) * pageHeightPx;
               const targetTop = nextPageStart + paddingPx;
-              
-              // Wie viel müssen wir schieben?
               const shiftNeeded = targetTop - top;
-              
-              // Wenn shiftNeeded < 0, bedeutet das, der Block ist schon auf der nächsten Seite (durch vorherige Verschiebungen),
-              // aber vielleicht zu hoch oben (im Padding Bereich der vorherigen Seite? Nein, Logik sollte passen).
-              // Nur schieben, wenn es wirklich nach unten geht.
-              
               if (shiftNeeded > 0) {
-                // Margin anwenden
                 const existingMargin = parseFloat(block.style.marginTop || '0');
                 block.style.marginTop = `${existingMargin + shiftNeeded}px`;
               }
@@ -771,7 +838,7 @@ export default function App() {
       heightLeft -= pageHeight;
 
       while (heightLeft > 0) { 
-        position = position - 297; // Fixer Abzug von 297mm pro Seite
+        position = position - 297;
         pdf.addPage();
         pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight); 
         heightLeft -= pageHeight;
@@ -787,6 +854,10 @@ export default function App() {
 
   const handleGeneratePDFDownload = async () => {
     setIsGeneratingPdf(true);
+    // [PERF] Erst Print-Container einblenden, warten, dann generieren
+    setShowPrintContainer(true);
+    await new Promise(r => setTimeout(r, 100)); // Kurz warten damit React rendert
+
     try {
       const blob = await generatePdfBlob();
       const url = URL.createObjectURL(blob);
@@ -799,6 +870,7 @@ export default function App() {
     } catch (err) {
       alert(err.message);
     } finally {
+      setShowPrintContainer(false); // [PERF] Container wieder ausblenden
       setIsGeneratingPdf(false);
     }
   };
@@ -811,6 +883,9 @@ export default function App() {
     if (!confirm("Sind Sie sicher? Das Protokoll wird final abgeschlossen und versendet.")) return;
 
     setIsSubmitting(true);
+    // [PERF] Erst Print-Container einblenden, warten, dann generieren
+    setShowPrintContainer(true);
+    await new Promise(r => setTimeout(r, 100));
 
     try {
       const pdfBlob = await generatePdfBlob();
@@ -819,22 +894,24 @@ export default function App() {
 
       const formData = new FormData();
       formData.append('file', pdfBlob, filename);
+      const recipients = data.meta.parties.map(p => p.email).filter(Boolean);
+      
       const metaData = {
         id: data.meta.id,
         address: data.meta.address,
         date: data.meta.date,
-        recipients: [...data.meta.sellers, ...data.meta.buyers].map(p => p.email).filter(Boolean)
+        recipients: recipients
       };
       formData.append('data', JSON.stringify(data));
       formData.append('meta', JSON.stringify(metaData));
 
-      const response = await fetch(N8N_WEBHOOK_URL, {
-        method: 'POST',
-        body: formData
-      });
+      const response = await fetch(N8N_WEBHOOK_URL, { method: 'POST', body: formData });
 
       if (!response.ok) throw new Error(`Server Status: ${response.status}`);
       const result = await response.json();
+      
+      // [PERSISTENCE] Draft löschen bei Erfolg
+      localStorage.removeItem(DRAFT_STORAGE_KEY);
       
       alert("Erfolg! PDF und Daten wurden übertragen.");
       if (result.pdfDriveUrl) window.open(result.pdfDriveUrl, '_blank');
@@ -843,6 +920,7 @@ export default function App() {
       console.error("Submit Error:", error);
       alert("Fehler bei der Übertragung: " + error.message);
     } finally {
+      setShowPrintContainer(false);
       setIsSubmitting(false);
     }
   };
@@ -856,7 +934,6 @@ export default function App() {
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 space-y-4">
              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Datum</label><input type="date" value={data.meta.date} onChange={e => updateField('meta.date', e.target.value)} className="w-full p-3 border border-slate-300 rounded-lg outline-none" /></div>
-               {/* HIER WURDE DAS INPUT FELD DURCH ADDRESS AUTOCOMPLETE ERSETZT */}
                <div>
                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Anschrift</label>
                  <AddressAutocomplete 
@@ -867,13 +944,36 @@ export default function App() {
                  />
                </div>
              </div>
+             
              <hr className="border-slate-100 my-4" />
-             {['sellers', 'buyers'].map(type => (
-               <div key={type}>
-                  <div className="flex justify-between items-center mb-2"><label className="text-xs font-bold text-slate-500 uppercase">{type === 'sellers' ? 'Verkäufer' : 'Käufer'}</label><button onClick={() => addItem(`meta.${type}`, { name: '', email: '' })} className="text-blue-600 text-xs font-bold flex gap-1 hover:bg-blue-50 px-2 py-1 rounded"><Plus size={14}/> Hinzufügen</button></div>
-                  <div className="space-y-3">{data.meta[type].map((p, idx) => (<div key={p.id} className="flex gap-2 items-start"><div className="grid grid-cols-1 md:grid-cols-2 gap-2 flex-1"><input placeholder={`Name ${idx + 1}`} value={p.name} onChange={(e) => updateItem(`meta.${type}`, p.id, 'name', e.target.value)} className="w-full p-2 border border-slate-300 rounded outline-none" /><input type="email" placeholder={`E-Mail ${idx + 1}`} value={p.email} onChange={(e) => updateItem(`meta.${type}`, p.id, 'email', e.target.value)} className="w-full p-2 border border-slate-300 rounded outline-none" /></div><IconButton onClick={() => removeItem(`meta.${type}`, p.id)} icon={Trash2} /></div>))}</div>
-               </div>
-             ))}
+             
+             {/* Unified Parties Section */}
+             <div>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Anwesende Parteien</label>
+                  <button onClick={() => addItem('meta.parties', { name: '', email: '', role: 'Käufer' })} className="text-blue-600 text-xs font-bold flex gap-1 hover:bg-blue-50 px-2 py-1 rounded"><Plus size={14}/> Person hinzufügen</button>
+                </div>
+                <div className="space-y-3">
+                  {data.meta.parties.map((p, idx) => (
+                    <div key={p.id} className="flex gap-2 items-start bg-slate-50 p-3 rounded-lg border border-slate-200">
+                      <div className="grid grid-cols-1 md:grid-cols-12 gap-2 flex-1 items-center">
+                         <div className="md:col-span-4">
+                           <input placeholder="Name" value={p.name} onChange={(e) => updateItem('meta.parties', p.id, 'name', e.target.value)} className="w-full p-2 border border-slate-300 rounded outline-none text-sm font-semibold" />
+                         </div>
+                         <div className="md:col-span-4">
+                           <input type="email" placeholder="E-Mail" value={p.email} onChange={(e) => updateItem('meta.parties', p.id, 'email', e.target.value)} className="w-full p-2 border border-slate-300 rounded outline-none text-sm" />
+                         </div>
+                         <div className="md:col-span-4">
+                           <select value={p.role} onChange={(e) => updateItem('meta.parties', p.id, 'role', e.target.value)} className="w-full p-2 border border-slate-300 rounded outline-none text-sm bg-white cursor-pointer">
+                             {PARTY_ROLES_OPTIONS.map(role => <option key={role} value={role}>{role}</option>)}
+                           </select>
+                         </div>
+                      </div>
+                      <IconButton onClick={() => removeItem('meta.parties', p.id)} icon={Trash2} />
+                    </div>
+                  ))}
+                </div>
+             </div>
           </div>
         </div>
       );
@@ -894,14 +994,70 @@ export default function App() {
         </div>
       );
       case 3: return (
+        // NEUE SECTION: BESTANDSAUFNAHME
+        <div className="space-y-6 animate-in fade-in">
+           <SectionTitle icon={LayoutGrid}>Bestandsaufnahme</SectionTitle>
+           <div className="space-y-4">
+             {data.inventory.rooms.length === 0 && (
+               <div className="bg-white p-8 rounded-xl border border-dashed border-slate-300 text-center text-slate-400">
+                 Noch keine Zimmer erfasst.
+               </div>
+             )}
+             {data.inventory.rooms.map((room) => (
+               <div key={room.id} className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 relative group">
+                 <div className="absolute top-2 right-2"><IconButton onClick={() => removeItem('inventory.rooms', room.id)} icon={Trash2} /></div>
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="md:col-span-2">
+                       <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Zimmer / Bereich <span className="text-red-500">*</span></label>
+                       <input 
+                         placeholder="z.B. Wohnzimmer, Flur, Keller" 
+                         className="w-full p-2 border border-slate-300 rounded font-medium text-lg" 
+                         value={room.name} 
+                         onChange={e => updateItem('inventory.rooms', room.id, 'name', e.target.value)} 
+                       />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Zustand / Bemerkung</label>
+                      <textarea 
+                        placeholder="Zustand Wände, Boden, Besonderheiten..." 
+                        className="w-full p-2 border border-slate-300 rounded text-sm h-20" 
+                        value={room.note} 
+                        onChange={e => updateItem('inventory.rooms', room.id, 'note', e.target.value)} 
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                       <ImageUploadButton 
+                         image={room.image} 
+                         onUpload={(imgData, name) => { 
+                           updateItem('inventory.rooms', room.id, 'image', imgData); 
+                           updateItem('inventory.rooms', room.id, 'imageName', name); 
+                         }} 
+                         onRemove={() => updateItem('inventory.rooms', room.id, 'image', null)} 
+                         labelSuffix={`Zimmer ${room.name}`} 
+                       />
+                    </div>
+                 </div>
+               </div>
+             ))}
+           </div>
+           <button onClick={() => addItem('inventory.rooms', { name: '', note: '', image: null })} className="w-full py-4 border-2 border-dashed border-blue-200 rounded-xl text-blue-600 font-bold hover:bg-blue-50 flex items-center justify-center gap-2"><Plus size={20} /> Zimmer hinzufügen</button>
+        </div>
+      );
+      case 4: return (
         <div className="flex flex-col lg:flex-row gap-8 animate-in fade-in">
           <div className="lg:w-1/3 space-y-6 order-2 lg:order-1">
             <div className="bg-slate-800 text-white p-6 rounded-xl shadow-lg"><h3 className="font-bold mb-4 flex items-center gap-2"><PenTool size={20} /> Unterschrift</h3><div className="space-y-4 mb-4"><select className="w-full p-2 rounded bg-slate-700 border border-slate-600 text-white" value={currentSignerRole} onChange={e => setCurrentSignerRole(e.target.value)}>{SIGNER_ROLES.map(r => <option key={r} value={r}>{r}</option>)}</select><input className="w-full p-2 rounded bg-slate-700 border border-slate-600 text-white" placeholder="Name (Optional)" value={currentSignerName} onChange={e => setCurrentSignerName(e.target.value)} /></div><div className="bg-white rounded-lg h-40 relative touch-none overflow-hidden cursor-crosshair mb-4"><canvas ref={canvasRef} onMouseDown={startDraw} onMouseMove={draw} onMouseUp={endDraw} onMouseLeave={endDraw} onTouchStart={startDraw} onTouchMove={draw} onTouchEnd={endDraw} className="w-full h-full" /><button onClick={clearSignature} className="absolute top-2 right-2 text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded hover:bg-red-100 hover:text-red-500">Reset</button></div><button onClick={saveSignature} className="w-full py-3 bg-blue-600 hover:bg-blue-500 rounded-lg font-bold flex items-center justify-center gap-2"><Check size={18} /> Unterschreiben</button></div>
             <div className="space-y-3"><button onClick={handleGenerateAndSubmit} disabled={isSubmitting} className="w-full py-4 bg-green-600 text-white hover:bg-green-700 rounded-xl font-bold flex items-center justify-center gap-2 shadow-xl disabled:opacity-70 disabled:cursor-not-allowed">{isSubmitting ? <Loader2 className="animate-spin" /> : <UploadCloud size={20} />} {isSubmitting ? 'Sende Daten & PDF...' : 'Übergabe abschließen'}</button><button onClick={handleGeneratePDFDownload} disabled={isGeneratingPdf} className="w-full py-3 bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm">{isGeneratingPdf ? <Loader2 className="animate-spin text-slate-400" /> : <Download size={20} />} {isGeneratingPdf ? 'Erzeuge PDF...' : 'Nur PDF laden (A4)'}</button></div>
           </div>
-          <div className="lg:w-2/3 order-1 lg:order-2"><div className="bg-slate-200 p-4 rounded-xl overflow-auto"><div className="mb-4 flex items-center gap-2 text-slate-600 font-bold"><Eye size={20} /> Protokoll-Vorschau</div>
-          {/* HIER: overflow-hidden Wrapper für Preview */}
-          <div className="bg-white shadow-lg border border-slate-200 mx-auto w-full max-w-[210mm] p-4 md:p-[10mm] overflow-hidden"><ProtocolContent data={data} signatures={data.signatures} isPreview={true} /></div></div></div>
+          <div className="lg:w-2/3 order-1 lg:order-2">
+            <div className="bg-slate-200 p-4 rounded-xl overflow-auto">
+              <div className="mb-4 flex items-center gap-2 text-slate-600 font-bold"><Eye size={20} /> Protokoll-Vorschau</div>
+              <div className="bg-white shadow-lg border border-slate-200 mx-auto w-full max-w-[210mm] p-4 md:p-[10mm] overflow-hidden">
+                {/* [PERF] Memoized Content verwenden */}
+                <MemoProtocolContent data={data} signatures={data.signatures} isPreview={true} />
+              </div>
+            </div>
+          </div>
         </div>
       );
       default: return null;
@@ -909,17 +1065,73 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-24">
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-24 relative">
       <PrintStyles />
-      {/* Hidden Print Container for PDF Generation */}
-      <div id="pdf-print-container">
-        <ProtocolContent data={data} signatures={data.signatures} isPreview={false} />
-      </div>
+      {/* [PERF] Print Container nur rendern wenn PDF erzeugt wird */}
+      {showPrintContainer && (
+        <div id="pdf-print-container">
+          <ProtocolContent data={data} signatures={data.signatures} isPreview={false} />
+        </div>
+      )}
 
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-20 px-4 py-3 flex items-center justify-between shadow-sm"><div className="flex items-center gap-2"><div className="bg-slate-900 text-white p-1.5 rounded-lg font-serif font-bold">L</div><span className="font-bold text-lg leading-none">Ludwigs<span className="text-slate-400 font-normal">App</span></span></div><div className="text-xs font-mono text-slate-400 bg-slate-100 px-2 py-1 rounded">{data.meta.id.slice(0,8)}...</div></header>
+      {/* HEADER */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-20 px-4 py-3 flex items-center justify-between shadow-sm">
+        <div className="flex items-center gap-2">
+          <div className="bg-slate-900 text-white p-1.5 rounded-lg font-serif font-bold">L</div>
+          <div className="flex flex-col">
+            <span className="font-bold text-lg leading-none">Ludwigs<span className="text-slate-400 font-normal">App</span></span>
+            {draftRestored && <span className="text-[10px] text-green-600 font-medium">Entwurf wiederhergestellt</span>}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={resetProtocol} className="text-slate-400 hover:text-red-500 p-2 rounded hover:bg-slate-50" title="Neues Protokoll (Reset)">
+            <RotateCcw size={18} />
+          </button>
+          <div className="text-xs font-mono text-slate-400 bg-slate-100 px-2 py-1 rounded hidden sm:block">{data.meta.id.slice(0,8)}...</div>
+        </div>
+      </header>
+
+      {/* STEP NAV */}
       <div className="bg-white border-b border-slate-200 px-4 py-3 overflow-x-auto"><div className="flex items-center gap-6 min-w-max mx-auto max-w-4xl">{STEPS.map((s, idx) => (<button key={s.id} onClick={() => setStep(idx)} className={`flex items-center gap-2 group ${idx === step ? 'text-blue-600' : 'text-slate-400'}`}><div className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition-colors ${idx === step ? 'border-blue-600 bg-blue-50' : (idx < step ? 'border-green-500 bg-green-50 text-green-600' : 'border-slate-200 bg-white')}`}>{idx < step ? <Check size={14} /> : <s.icon size={14} />}</div><span className={`text-sm font-medium ${idx === step ? 'text-slate-900' : 'group-hover:text-slate-600'}`}>{s.title}</span>{idx < STEPS.length - 1 && <ChevronRight size={14} className="text-slate-300 ml-2" />}</button>))}</div></div>
+      
+      {/* MAIN CONTENT */}
       <main className="max-w-6xl mx-auto p-4 md:p-8">{renderContent()}</main>
-      {step < 3 && (<div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 p-4 z-10"><div className="max-w-2xl mx-auto flex justify-between gap-4"><button onClick={() => {window.scrollTo(0,0); setStep(Math.max(0, step - 1))}} disabled={step === 0} className="flex-1 py-3 px-4 rounded-xl font-semibold border border-slate-300 text-slate-600 disabled:opacity-50 hover:bg-slate-50">Zurück</button><button onClick={() => {window.scrollTo(0,0); setStep(Math.min(STEPS.length - 1, step + 1))}} className="flex-[2] py-3 px-4 rounded-xl font-bold bg-blue-600 text-white shadow-lg hover:bg-blue-700 flex items-center justify-center gap-2">Weiter <ChevronRight size={20} /></button></div></div>)}
+      
+      {/* FOOTER NAV */}
+      {step < 4 && (<div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 p-4 z-10"><div className="max-w-2xl mx-auto flex justify-between gap-4"><button onClick={() => {window.scrollTo(0,0); setStep(Math.max(0, step - 1))}} disabled={step === 0} className="flex-1 py-3 px-4 rounded-xl font-semibold border border-slate-300 text-slate-600 disabled:opacity-50 hover:bg-slate-50">Zurück</button><button onClick={() => {window.scrollTo(0,0); setStep(Math.min(STEPS.length - 1, step + 1))}} className="flex-[2] py-3 px-4 rounded-xl font-bold bg-blue-600 text-white shadow-lg hover:bg-blue-700 flex items-center justify-center gap-2">Weiter <ChevronRight size={20} /></button></div></div>)}
+
+      {/* [PERSISTENCE] RESTORE MODAL */}
+      {showDraftDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center gap-3 mb-4 text-amber-600">
+              <AlertTriangle size={28} />
+              <h3 className="font-bold text-lg text-slate-900">Entwurf gefunden</h3>
+            </div>
+            <p className="text-slate-600 mb-6">
+              Es wurde ein ungespeicherter Entwurf vom 
+              <span className="font-semibold block text-slate-800">
+                {new Date(foundDraft?.savedAt).toLocaleString()}
+              </span> 
+              gefunden. Möchtest du ihn wiederherstellen?
+            </p>
+            <div className="flex flex-col gap-3">
+              <button 
+                onClick={restoreDraft}
+                className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg flex items-center justify-center gap-2"
+              >
+                <Save size={18} /> Entwurf laden
+              </button>
+              <button 
+                onClick={discardDraft}
+                className="w-full py-3 bg-white border border-slate-300 hover:bg-slate-50 text-slate-600 font-medium rounded-lg"
+              >
+                Verwerfen (Neu starten)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
