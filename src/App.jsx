@@ -672,7 +672,8 @@ export default function App() {
         status: status,
         savedAt: new Date().toISOString(),
         completedAt: status === 'completed' ? new Date().toISOString() : (idx >= 0 ? existingHistory[idx].completedAt : undefined),
-        pdfUrl: pdfUrl || (idx >= 0 ? existingHistory[idx].pdfUrl : undefined)
+        pdfUrl: pdfUrl || (idx >= 0 ? existingHistory[idx].pdfUrl : undefined),
+        data: currentData // Speichere vollständige Protokolldaten für alle Einträge (Draft und Completed)
       };
 
       let newHistory;
@@ -717,27 +718,62 @@ export default function App() {
     }
   };
 
-  // [LOGIC] Resume Draft aus Archiv
+  // [LOGIC] Resume Draft aus Archiv (neue Implementierung)
   const handleResumeDraft = (historyId) => {
+    // 1. Suche passenden Eintrag in historyList
+    const entry = historyList.find(h => h.id === historyId);
+    if (!entry) {
+      alert("Für diesen Entwurf wurden keine Daten gefunden.");
+      return;
+    }
+    // 2. Prüfe, ob entry.data existiert
+    if (!entry.data) {
+      alert("Dieser Entwurf hat keine gespeicherten Formulardaten. Bitte öffne ihn einmal im Protokoll, damit er gespeichert werden kann.");
+      return;
+    }
+    // 3. Daten setzen und Draft-Speicher aktualisieren
+    setData(entry.data);
+    setStep(0);
+    setView("form");
+    setDraftRestored(true);
+    window.scrollTo(0, 0);
+    // Draft wieder im Draft-Speicher ablegen
     try {
+      const draft = { data: entry.data, savedAt: entry.savedAt || new Date().toISOString() };
+      localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+    } catch (e) {
+      console.warn("Konnte Draft nicht im localStorage aktualisieren", e);
+    }
+  };
+
+  // [LOGIC] Delete History Entry (Draft or Completed)
+  const handleDeleteHistoryEntry = (id) => {
+    if (!confirm("Diesen Eintrag wirklich aus dem Archiv löschen? Das erzeugte PDF (z.B. in deinem E-Mail-Postfach oder Drive) bleibt davon unberührt.")) {
+      return;
+    }
+    try {
+      const existingHistory = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || "[]");
+      const newHistory = existingHistory.filter(h => h.id !== id);
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(newHistory));
+      setHistoryList(newHistory);
+
+      // Falls der gelöschte Eintrag der aktuell aktive Draft im Speicher ist, diesen auch entfernen
       const storedDraft = localStorage.getItem(DRAFT_STORAGE_KEY);
-      if (!storedDraft) {
-        alert("Dieser Entwurf ist nicht mehr im lokalen Zwischenspeicher verfügbar.");
-        return;
+      if (storedDraft) {
+        const parsedDraft = JSON.parse(storedDraft);
+        if (parsedDraft?.data?.meta?.id === id) {
+          localStorage.removeItem(DRAFT_STORAGE_KEY);
+          // Wenn der aktuell geladene Datensatz diesem Draft entspricht, Formular zurücksetzen
+          if (data.meta.id === id) {
+            setData(INITIAL_DATA);
+            setDraftRestored(false);
+            setStep(0);
+            setView("form");
+          }
+        }
       }
-      const parsed = JSON.parse(storedDraft);
-      if (parsed.data.meta.id === historyId) {
-        setData(parsed.data);
-        setStep(0); // Optional: könnte man auch speichern
-        setView("form");
-        setDraftRestored(true);
-        window.scrollTo(0, 0);
-      } else {
-        alert("Der gespeicherte Entwurf stimmt nicht mit der ausgewählten ID überein. Es kann immer nur ein aktiver Entwurf bearbeitet werden.");
-      }
-    } catch(e) {
-      console.error(e);
-      alert("Fehler beim Laden des Entwurfs.");
+    } catch (e) {
+      console.error("Fehler beim Löschen des History-Eintrags:", e);
     }
   };
 
@@ -1035,8 +1071,19 @@ export default function App() {
                       {draft.parties && draft.parties.map(p => `${p.name} (${p.role})`).join(', ')}
                     </div>
                     <div className="flex justify-between items-center mt-2 border-t pt-2">
-                       <span className="text-[10px] text-slate-400">Gespeichert: {new Date(draft.savedAt).toLocaleString()}</span>
-                       <button onClick={() => handleResumeDraft(draft.id)} className="text-sm font-bold text-blue-600 hover:bg-blue-50 px-3 py-1 rounded flex items-center gap-1">
+                       <div className="flex flex-col">
+                         <span className="text-[10px] text-slate-400">Gespeichert: {new Date(draft.savedAt).toLocaleString()}</span>
+                         <button
+                           onClick={() => handleDeleteHistoryEntry(draft.id)}
+                           className="text-[10px] text-red-500 hover:text-red-600 mt-1 self-start"
+                         >
+                           Entwurf löschen
+                         </button>
+                       </div>
+                       <button
+                         onClick={() => handleResumeDraft(draft.id)}
+                         className="text-sm font-bold text-blue-600 hover:bg-blue-50 px-3 py-1 rounded flex items-center gap-1"
+                       >
                           Weiter <ChevronRight size={14} />
                        </button>
                     </div>
@@ -1066,12 +1113,25 @@ export default function App() {
                       {comp.parties && comp.parties.map(p => `${p.name} (${p.role})`).join(', ')}
                     </div>
                     <div className="flex justify-between items-center mt-2 border-t pt-2">
-                       <span className="text-[10px] text-slate-400">Abschluss: {new Date(comp.completedAt).toLocaleDateString()}</span>
+                       <div className="flex flex-col">
+                         <span className="text-[10px] text-slate-400">Abschluss: {new Date(comp.completedAt).toLocaleDateString()}</span>
+                         <button
+                           onClick={() => handleDeleteHistoryEntry(comp.id)}
+                           className="text-[10px] text-red-500 hover:text-red-600 mt-1 self-start"
+                         >
+                           Aus Archiv löschen
+                         </button>
+                       </div>
                        {comp.pdfUrl ? (
-                         <button onClick={() => window.open(comp.pdfUrl, '_blank')} className="text-sm font-bold text-green-700 hover:bg-green-50 px-3 py-1 rounded flex items-center gap-1">
+                         <button
+                           onClick={() => window.open(comp.pdfUrl, '_blank')}
+                           className="text-sm font-bold text-green-700 hover:bg-green-50 px-3 py-1 rounded flex items-center gap-1"
+                         >
                             <ExternalLink size={14} /> PDF Öffnen
                          </button>
-                       ) : <span className="text-xs italic text-slate-400">Kein PDF Link</span>}
+                       ) : (
+                         <span className="text-xs italic text-slate-400">Kein PDF Link</span>
+                       )}
                     </div>
                  </div>
                ))}
