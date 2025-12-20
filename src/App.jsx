@@ -24,7 +24,12 @@ import {
   LayoutGrid,
   Save,
   RotateCcw,
-  AlertTriangle
+  AlertTriangle,
+  Archive,
+  FileClock,
+  CheckCircle2,
+  ExternalLink,
+  History
 } from 'lucide-react';
 
 // --- KONFIGURATION ---
@@ -40,7 +45,8 @@ const getN8nWebhookUrl = () => {
 };
 
 const N8N_WEBHOOK_URL = getN8nWebhookUrl();
-const DRAFT_STORAGE_KEY = "uebergabeApp.currentDraft"; // [PERSISTENCE] Key für localStorage
+const DRAFT_STORAGE_KEY = "uebergabeApp.currentDraft"; // [PERSISTENCE] Aktueller Entwurf (Full Data)
+const HISTORY_STORAGE_KEY = "uebergabeApp.protocolHistory"; // [PERSISTENCE] Historie (Metadaten)
 
 // --- HELPER: UUID (ROBUST) ---
 const uuid = () => {
@@ -573,16 +579,16 @@ const ProtocolContent = ({ data, signatures, isPreview }) => {
 };
 
 // [PERF] Memoized Version des ProtocolContent für die Vorschau
-// Verhindert Re-Renders der Vorschau bei jeder Eingabe, solange die Props gleich bleiben
-// Hinweis: Da data bei jedem Keystroke neu erstellt wird, nützt memo nur etwas, 
-// wenn man zwischen Steps wechselt, ohne data zu ändern.
 const MemoProtocolContent = React.memo(ProtocolContent);
 
 // --- MAIN APP COMPONENT ---
 
 export default function App() {
   const [step, setStep] = useState(0);
+  const [view, setView] = useState("form"); // [VIEW] 'form' oder 'archive'
   const [data, setData] = useState(INITIAL_DATA);
+  const [historyList, setHistoryList] = useState([]); // [PERSISTENCE] History Liste (nur Metadata)
+  
   const [currentSignerRole, setCurrentSignerRole] = useState(SIGNER_ROLES[0]);
   const [currentSignerName, setCurrentSignerName] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
@@ -600,7 +606,19 @@ export default function App() {
   const canvasRef = useRef(null);
   const [isDrawing, setIsDrawing] = useState(false);
 
-  // --- PERSISTENCE: RESTORE DRAFT ON MOUNT ---
+  // --- PERSISTENCE: LOAD HISTORY ON MOUNT ---
+  useEffect(() => {
+    try {
+      const storedHist = localStorage.getItem(HISTORY_STORAGE_KEY);
+      if (storedHist) {
+        setHistoryList(JSON.parse(storedHist));
+      }
+    } catch (e) {
+      console.error("Fehler beim Laden der History:", e);
+    }
+  }, []);
+
+  // --- PERSISTENCE: RESTORE CURRENT DRAFT ON MOUNT ---
   useEffect(() => {
     try {
       const stored = localStorage.getItem(DRAFT_STORAGE_KEY);
@@ -616,20 +634,22 @@ export default function App() {
     }
   }, []);
 
-  // --- PERSISTENCE: AUTO-SAVE DRAFT ---
+  // --- PERSISTENCE: AUTO-SAVE DRAFT & UPDATE HISTORY ---
   useEffect(() => {
-    // Nicht speichern, wenn wir gerade erst mounten oder den Dialog anzeigen
     if (showDraftDialog) return;
 
-    // Debounce Save (1 Sekunde)
     const timer = setTimeout(() => {
       try {
+        // 1. Save Full Draft
         const draft = {
           data,
           savedAt: new Date().toISOString()
         };
         localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
-        // Optional: Kleiner Log oder Status
+
+        // 2. Update History (Metadata only)
+        updateHistoryEntry(data, "draft");
+        
       } catch (e) {
         console.warn("Auto-Save fehlgeschlagen (evtl. Quota exceeded):", e);
       }
@@ -637,6 +657,38 @@ export default function App() {
 
     return () => clearTimeout(timer);
   }, [data, showDraftDialog]);
+
+  // Helper zum Updaten der History
+  const updateHistoryEntry = (currentData, status, pdfUrl = null) => {
+    try {
+      const existingHistory = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || "[]");
+      const idx = existingHistory.findIndex(h => h.id === currentData.meta.id);
+      
+      const newEntry = {
+        id: currentData.meta.id,
+        date: currentData.meta.date,
+        address: currentData.meta.address,
+        parties: currentData.meta.parties.map(p => ({ name: p.name, role: p.role })), // Kompakte Party Info
+        status: status,
+        savedAt: new Date().toISOString(),
+        completedAt: status === 'completed' ? new Date().toISOString() : (idx >= 0 ? existingHistory[idx].completedAt : undefined),
+        pdfUrl: pdfUrl || (idx >= 0 ? existingHistory[idx].pdfUrl : undefined)
+      };
+
+      let newHistory;
+      if (idx >= 0) {
+        newHistory = [...existingHistory];
+        newHistory[idx] = newEntry;
+      } else {
+        newHistory = [newEntry, ...existingHistory];
+      }
+      
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(newHistory));
+      setHistoryList(newHistory);
+    } catch (e) {
+      console.error("History Update Error:", e);
+    }
+  };
 
   // Funktion: Draft wiederherstellen
   const restoreDraft = () => {
@@ -660,7 +712,32 @@ export default function App() {
       setDraftRestored(false);
       localStorage.removeItem(DRAFT_STORAGE_KEY);
       setStep(0);
+      setView("form");
       window.scrollTo(0, 0);
+    }
+  };
+
+  // [LOGIC] Resume Draft aus Archiv
+  const handleResumeDraft = (historyId) => {
+    try {
+      const storedDraft = localStorage.getItem(DRAFT_STORAGE_KEY);
+      if (!storedDraft) {
+        alert("Dieser Entwurf ist nicht mehr im lokalen Zwischenspeicher verfügbar.");
+        return;
+      }
+      const parsed = JSON.parse(storedDraft);
+      if (parsed.data.meta.id === historyId) {
+        setData(parsed.data);
+        setStep(0); // Optional: könnte man auch speichern
+        setView("form");
+        setDraftRestored(true);
+        window.scrollTo(0, 0);
+      } else {
+        alert("Der gespeicherte Entwurf stimmt nicht mit der ausgewählten ID überein. Es kann immer nur ein aktiver Entwurf bearbeitet werden.");
+      }
+    } catch(e) {
+      console.error(e);
+      alert("Fehler beim Laden des Entwurfs.");
     }
   };
 
@@ -777,7 +854,7 @@ export default function App() {
       window.addEventListener('resize', resizeCanvas);
       return () => { clearTimeout(timer); window.removeEventListener('resize', resizeCanvas); };
     }
-  }, [step]);
+  }, [step, view]); // Added view dependency
 
   // --- PDF GENERATION ---
   const generatePdfBlob = async () => {
@@ -854,9 +931,8 @@ export default function App() {
 
   const handleGeneratePDFDownload = async () => {
     setIsGeneratingPdf(true);
-    // [PERF] Erst Print-Container einblenden, warten, dann generieren
     setShowPrintContainer(true);
-    await new Promise(r => setTimeout(r, 100)); // Kurz warten damit React rendert
+    await new Promise(r => setTimeout(r, 100));
 
     try {
       const blob = await generatePdfBlob();
@@ -870,7 +946,7 @@ export default function App() {
     } catch (err) {
       alert(err.message);
     } finally {
-      setShowPrintContainer(false); // [PERF] Container wieder ausblenden
+      setShowPrintContainer(false); 
       setIsGeneratingPdf(false);
     }
   };
@@ -883,7 +959,6 @@ export default function App() {
     if (!confirm("Sind Sie sicher? Das Protokoll wird final abgeschlossen und versendet.")) return;
 
     setIsSubmitting(true);
-    // [PERF] Erst Print-Container einblenden, warten, dann generieren
     setShowPrintContainer(true);
     await new Promise(r => setTimeout(r, 100));
 
@@ -910,11 +985,19 @@ export default function App() {
       if (!response.ok) throw new Error(`Server Status: ${response.status}`);
       const result = await response.json();
       
-      // [PERSISTENCE] Draft löschen bei Erfolg
+      // [PERSISTENCE] 1. Update History to Completed
+      updateHistoryEntry(data, "completed", result.pdfDriveUrl);
+
+      // [PERSISTENCE] 2. Draft löschen
       localStorage.removeItem(DRAFT_STORAGE_KEY);
       
       alert("Erfolg! PDF und Daten wurden übertragen.");
       if (result.pdfDriveUrl) window.open(result.pdfDriveUrl, '_blank');
+      
+      // Wechsel ins Archiv oder Reset? Hier: Reset
+      setData(INITIAL_DATA);
+      setStep(0);
+      setView("archive"); // Wechseln wir ins Archiv um das fertige Ergebnis zu sehen
 
     } catch (error) {
       console.error("Submit Error:", error);
@@ -925,8 +1008,86 @@ export default function App() {
     }
   };
 
+  // --- ARCHIVE VIEW COMPONENT ---
+  const renderArchive = () => {
+    const drafts = historyList.filter(h => h.status === 'draft').sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt));
+    const completed = historyList.filter(h => h.status === 'completed').sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
+
+    return (
+      <div className="space-y-8 animate-in fade-in">
+        {/* Entwürfe */}
+        <div>
+          <div className="flex items-center gap-2 mb-4">
+             <div className="bg-amber-100 p-2 rounded-full text-amber-600"><FileClock size={20} /></div>
+             <h3 className="text-xl font-bold text-slate-800">Laufende Entwürfe</h3>
+          </div>
+          {drafts.length === 0 ? (
+            <p className="text-slate-500 italic ml-2">Keine offenen Entwürfe.</p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+               {drafts.map(draft => (
+                 <div key={draft.id} className="bg-white p-4 rounded-xl shadow-sm border border-l-4 border-amber-300 hover:shadow-md transition-shadow relative">
+                    <div className="mb-2">
+                       <p className="font-bold text-slate-900 truncate">{draft.address || "Ohne Adresse"}</p>
+                       <p className="text-sm text-slate-500">{draft.date}</p>
+                    </div>
+                    <div className="text-xs text-slate-500 mb-4 line-clamp-1">
+                      {draft.parties && draft.parties.map(p => `${p.name} (${p.role})`).join(', ')}
+                    </div>
+                    <div className="flex justify-between items-center mt-2 border-t pt-2">
+                       <span className="text-[10px] text-slate-400">Gespeichert: {new Date(draft.savedAt).toLocaleString()}</span>
+                       <button onClick={() => handleResumeDraft(draft.id)} className="text-sm font-bold text-blue-600 hover:bg-blue-50 px-3 py-1 rounded flex items-center gap-1">
+                          Weiter <ChevronRight size={14} />
+                       </button>
+                    </div>
+                 </div>
+               ))}
+            </div>
+          )}
+        </div>
+
+        {/* Abgeschlossen */}
+        <div>
+          <div className="flex items-center gap-2 mb-4">
+             <div className="bg-green-100 p-2 rounded-full text-green-600"><CheckCircle2 size={20} /></div>
+             <h3 className="text-xl font-bold text-slate-800">Archiv (Abgeschlossen)</h3>
+          </div>
+          {completed.length === 0 ? (
+             <p className="text-slate-500 italic ml-2">Noch keine Protokolle abgeschlossen.</p>
+          ) : (
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+               {completed.map(comp => (
+                 <div key={comp.id} className="bg-white p-4 rounded-xl shadow-sm border border-l-4 border-green-500 hover:shadow-md transition-shadow relative opacity-90 hover:opacity-100">
+                    <div className="mb-2">
+                       <p className="font-bold text-slate-900 truncate">{comp.address || "Ohne Adresse"}</p>
+                       <p className="text-sm text-slate-500">{comp.date}</p>
+                    </div>
+                    <div className="text-xs text-slate-500 mb-4 line-clamp-1">
+                      {comp.parties && comp.parties.map(p => `${p.name} (${p.role})`).join(', ')}
+                    </div>
+                    <div className="flex justify-between items-center mt-2 border-t pt-2">
+                       <span className="text-[10px] text-slate-400">Abschluss: {new Date(comp.completedAt).toLocaleDateString()}</span>
+                       {comp.pdfUrl ? (
+                         <button onClick={() => window.open(comp.pdfUrl, '_blank')} className="text-sm font-bold text-green-700 hover:bg-green-50 px-3 py-1 rounded flex items-center gap-1">
+                            <ExternalLink size={14} /> PDF Öffnen
+                         </button>
+                       ) : <span className="text-xs italic text-slate-400">Kein PDF Link</span>}
+                    </div>
+                 </div>
+               ))}
+             </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   // --- RENDER ---
   const renderContent = () => {
+    // Wenn Archiv aktiv, zeige Archiv
+    if (view === 'archive') return renderArchive();
+
+    // Sonst Formular-Steps
     switch(step) {
       case 0: return (
         <div className="space-y-6 animate-in fade-in">
@@ -1075,30 +1236,53 @@ export default function App() {
       )}
 
       {/* HEADER */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-20 px-4 py-3 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-2">
-          <div className="bg-slate-900 text-white p-1.5 rounded-lg font-serif font-bold">L</div>
-          <div className="flex flex-col">
-            <span className="font-bold text-lg leading-none">Ludwigs<span className="text-slate-400 font-normal">App</span></span>
-            {draftRestored && <span className="text-[10px] text-green-600 font-medium">Entwurf wiederhergestellt</span>}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-20 px-4 py-3 flex flex-col md:flex-row items-center justify-between gap-3 shadow-sm">
+        <div className="flex items-center gap-2 w-full md:w-auto justify-between md:justify-start">
+          <div className="flex items-center gap-2">
+            <div className="bg-slate-900 text-white p-1.5 rounded-lg font-serif font-bold">L</div>
+            <div className="flex flex-col">
+              <span className="font-bold text-lg leading-none">Ludwigs<span className="text-slate-400 font-normal">App</span></span>
+              {draftRestored && view === 'form' && <span className="text-[10px] text-green-600 font-medium">Entwurf aktiv</span>}
+            </div>
+          </div>
+          
+          {/* TAB NAV (VIEW SWITCHER) */}
+          <div className="flex bg-slate-100 p-1 rounded-lg ml-4">
+             <button 
+               onClick={() => setView('form')} 
+               className={`px-3 py-1 text-sm font-semibold rounded-md transition-all ${view === 'form' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+             >
+               Protokoll
+             </button>
+             <button 
+               onClick={() => setView('archive')} 
+               className={`px-3 py-1 text-sm font-semibold rounded-md transition-all flex items-center gap-1 ${view === 'archive' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+             >
+               <History size={14} /> Archiv
+             </button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={resetProtocol} className="text-slate-400 hover:text-red-500 p-2 rounded hover:bg-slate-50" title="Neues Protokoll (Reset)">
-            <RotateCcw size={18} />
-          </button>
+
+        <div className="flex items-center gap-2 w-full md:w-auto justify-end">
+          {view === 'form' && (
+            <button onClick={resetProtocol} className="text-slate-400 hover:text-red-500 p-2 rounded hover:bg-slate-50" title="Neues Protokoll (Reset)">
+              <RotateCcw size={18} />
+            </button>
+          )}
           <div className="text-xs font-mono text-slate-400 bg-slate-100 px-2 py-1 rounded hidden sm:block">{data.meta.id.slice(0,8)}...</div>
         </div>
       </header>
 
-      {/* STEP NAV */}
-      <div className="bg-white border-b border-slate-200 px-4 py-3 overflow-x-auto"><div className="flex items-center gap-6 min-w-max mx-auto max-w-4xl">{STEPS.map((s, idx) => (<button key={s.id} onClick={() => setStep(idx)} className={`flex items-center gap-2 group ${idx === step ? 'text-blue-600' : 'text-slate-400'}`}><div className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition-colors ${idx === step ? 'border-blue-600 bg-blue-50' : (idx < step ? 'border-green-500 bg-green-50 text-green-600' : 'border-slate-200 bg-white')}`}>{idx < step ? <Check size={14} /> : <s.icon size={14} />}</div><span className={`text-sm font-medium ${idx === step ? 'text-slate-900' : 'group-hover:text-slate-600'}`}>{s.title}</span>{idx < STEPS.length - 1 && <ChevronRight size={14} className="text-slate-300 ml-2" />}</button>))}</div></div>
+      {/* STEP NAV - Nur anzeigen im Form-View */}
+      {view === 'form' && (
+        <div className="bg-white border-b border-slate-200 px-4 py-3 overflow-x-auto"><div className="flex items-center gap-6 min-w-max mx-auto max-w-4xl">{STEPS.map((s, idx) => (<button key={s.id} onClick={() => setStep(idx)} className={`flex items-center gap-2 group ${idx === step ? 'text-blue-600' : 'text-slate-400'}`}><div className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition-colors ${idx === step ? 'border-blue-600 bg-blue-50' : (idx < step ? 'border-green-500 bg-green-50 text-green-600' : 'border-slate-200 bg-white')}`}>{idx < step ? <Check size={14} /> : <s.icon size={14} />}</div><span className={`text-sm font-medium ${idx === step ? 'text-slate-900' : 'group-hover:text-slate-600'}`}>{s.title}</span>{idx < STEPS.length - 1 && <ChevronRight size={14} className="text-slate-300 ml-2" />}</button>))}</div></div>
+      )}
       
       {/* MAIN CONTENT */}
       <main className="max-w-6xl mx-auto p-4 md:p-8">{renderContent()}</main>
       
-      {/* FOOTER NAV */}
-      {step < 4 && (<div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 p-4 z-10"><div className="max-w-2xl mx-auto flex justify-between gap-4"><button onClick={() => {window.scrollTo(0,0); setStep(Math.max(0, step - 1))}} disabled={step === 0} className="flex-1 py-3 px-4 rounded-xl font-semibold border border-slate-300 text-slate-600 disabled:opacity-50 hover:bg-slate-50">Zurück</button><button onClick={() => {window.scrollTo(0,0); setStep(Math.min(STEPS.length - 1, step + 1))}} className="flex-[2] py-3 px-4 rounded-xl font-bold bg-blue-600 text-white shadow-lg hover:bg-blue-700 flex items-center justify-center gap-2">Weiter <ChevronRight size={20} /></button></div></div>)}
+      {/* FOOTER NAV - Nur anzeigen im Form-View */}
+      {view === 'form' && step < 4 && (<div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 p-4 z-10"><div className="max-w-2xl mx-auto flex justify-between gap-4"><button onClick={() => {window.scrollTo(0,0); setStep(Math.max(0, step - 1))}} disabled={step === 0} className="flex-1 py-3 px-4 rounded-xl font-semibold border border-slate-300 text-slate-600 disabled:opacity-50 hover:bg-slate-50">Zurück</button><button onClick={() => {window.scrollTo(0,0); setStep(Math.min(STEPS.length - 1, step + 1))}} className="flex-[2] py-3 px-4 rounded-xl font-bold bg-blue-600 text-white shadow-lg hover:bg-blue-700 flex items-center justify-center gap-2">Weiter <ChevronRight size={20} /></button></div></div>)}
 
       {/* [PERSISTENCE] RESTORE MODAL */}
       {showDraftDialog && (
