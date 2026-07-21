@@ -1,3 +1,16 @@
+# uebergabe-app
+
+Dieses Repo enthält zwei Apps (Hash-Routing in `src/main.jsx`):
+
+- **KI-Börsenradar** (`#/`, Standard auf diesem Branch): Prognose-Tracker für
+  KI-Aktienprognosen zu Live-Events – Paper-Trading, keine Anlageberatung.
+  Architektur, Datenquellen und Bedienung: siehe [ARCHITEKTUR.md](./ARCHITEKTUR.md).
+- **Übergabe-App** (`#/uebergabe`): das bestehende Übergabeprotokoll-Tool, unverändert.
+
+Start: `npm install && npm run dev`
+
+---
+
 # React + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
